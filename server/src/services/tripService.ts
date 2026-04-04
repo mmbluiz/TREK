@@ -75,9 +75,13 @@ export function generateDays(tripId: number | bigint | string, startDate: string
   const targetDateSet = new Set(targetDates);
 
   const toDelete = existing.filter(d => d.date && !targetDateSet.has(d.date));
-  const datelessToDelete = existing.filter(d => !d.date);
+  const dateless = existing.filter(d => !d.date).sort((a, b) => a.day_number - b.day_number);
   const del = db.prepare('DELETE FROM days WHERE id = ?');
-  for (const d of [...toDelete, ...datelessToDelete]) del.run(d.id);
+  for (const d of toDelete) del.run(d.id);
+
+  // Reassign dateless days to the first unmatched target dates (preserves content)
+  const assignDate = db.prepare('UPDATE days SET date = ?, day_number = ? WHERE id = ?');
+  let datelessIdx = 0;
 
   const setTemp = db.prepare('UPDATE days SET day_number = ? WHERE id = ?');
   const kept = existing.filter(d => d.date && targetDateSet.has(d.date));
@@ -91,10 +95,17 @@ export function generateDays(tripId: number | bigint | string, startDate: string
     const ex = existingByDate.get(date);
     if (ex) {
       update.run(i + 1, ex.id);
+    } else if (datelessIdx < dateless.length) {
+      // Reuse a dateless day — keeps its assignments, notes, etc.
+      assignDate.run(date, i + 1, dateless[datelessIdx].id);
+      datelessIdx++;
     } else {
       insert.run(tripId, i + 1, date);
     }
   }
+
+  // Delete any remaining unused dateless days
+  for (let i = datelessIdx; i < dateless.length; i++) del.run(dateless[i].id);
 }
 
 // ── Trip CRUD ─────────────────────────────────────────────────────────────
